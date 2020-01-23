@@ -168,6 +168,61 @@ static struct miscdevice sgx_dev = {
 	.mode   = 0666,
 };
 
+#ifdef CONFIG_PROC_FS
+static int sgx_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, sgx_stats_read, NULL);
+}
+
+static struct file_operations sgx_stats_ops = {
+	.owner = THIS_MODULE,
+	.open = sgx_stats_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release
+};
+
+static struct seq_operations sgx_encl_seq_ops = {
+	.start = sgx_encl_seq_start,
+	.next = sgx_encl_seq_next,
+	.stop = sgx_encl_seq_stop,
+	.show = sgx_encl_seq_show,
+};
+
+static int sgx_encl_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &sgx_encl_seq_ops);
+}
+
+static struct file_operations sgx_encl_ops = {
+	.owner = THIS_MODULE,
+	.open = sgx_encl_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release
+};
+
+static struct seq_operations sgx_logs_seq_ops = {
+        .start = sgx_logs_seq_start,
+        .next = sgx_logs_seq_next,
+        .stop = sgx_logs_seq_stop,
+        .show = sgx_logs_seq_show,
+};
+
+static int sgx_logs_open(struct inode *inode, struct file *file)
+{
+    return seq_open(file, &sgx_logs_seq_ops);
+}
+
+static struct file_operations sgx_logs_ops = {
+        .owner = THIS_MODULE,
+        .open = sgx_logs_open,
+        .read = seq_read,
+        .llseek = seq_lseek,
+        .release = seq_release
+};
+#endif
+
 static int sgx_pm_suspend(struct device *dev)
 {
 	struct sgx_tgid_ctx *ctx;
@@ -286,6 +341,23 @@ static int sgx_dev_init(struct device *parent)
 		pr_info("intel_sgx:  can not reset SGX LE public key hash MSRs\n");
 	}
 
+#ifdef CONFIG_PROC_FS
+	if (!proc_create("sgx_stats", 0444, NULL, &sgx_stats_ops)) {
+		ret = -ENOMEM;
+		goto out_workqueue;
+	}
+
+	if (!proc_create("sgx_enclaves", 0444, NULL, &sgx_encl_ops)) {
+		ret = -ENOMEM;
+		goto out_workqueue;
+	}
+
+    if (!proc_create("sgx_logs", 0444, NULL, &sgx_logs_ops)) {
+        ret = -ENOMEM;
+        goto out_workqueue;
+    }
+#endif
+
 	return 0;
 out_workqueue:
 	destroy_workqueue(sgx_add_page_wq);
@@ -402,6 +474,9 @@ void cleanup_sgx_module(void)
 	dev_set_uevent_suppress(&pdev->dev, true);
 	platform_device_unregister(pdev);
 	platform_driver_unregister(&sgx_drv);
+	remove_proc_entry("sgx_stats", NULL);
+	remove_proc_entry("sgx_enclaves", NULL);
+	remove_proc_entry("sgx_logs", NULL);
 }
 
 module_init(init_sgx_module);

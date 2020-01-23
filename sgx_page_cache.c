@@ -68,6 +68,7 @@
 #else
 	#include <linux/signal.h>
 #endif
+#include <linux/seq_file.h>
 #include <linux/slab.h>
 
 #define SGX_NR_LOW_EPC_PAGES_DEFAULT 32
@@ -78,11 +79,16 @@ static DEFINE_SPINLOCK(sgx_free_list_lock);
 
 LIST_HEAD(sgx_tgid_ctx_list);
 DEFINE_MUTEX(sgx_tgid_ctx_mutex);
+LIST_HEAD(sgx_all_encl_list);
+LIST_HEAD(sgx_logs_encl_list);
+DEFINE_MUTEX(sgx_logs_encl_list_mutex);
 atomic_t sgx_va_pages_cnt = ATOMIC_INIT(0);
 static unsigned int sgx_nr_total_epc_pages;
 static unsigned int sgx_nr_free_pages;
 static unsigned int sgx_nr_low_pages = SGX_NR_LOW_EPC_PAGES_DEFAULT;
 static unsigned int sgx_nr_high_pages;
+static unsigned long sgx_pages_freed = 0;
+static unsigned long sgx_pages_alloced = 0;
 static struct task_struct *ksgxswapd_tsk;
 static DECLARE_WAIT_QUEUE_HEAD(ksgxswapd_waitq);
 
@@ -277,6 +283,9 @@ static int __sgx_ewb(struct sgx_encl *encl,
 	pginfo.secs = 0;
 	ret = __ewb(&pginfo, epc,
 		    (void *)((unsigned long)va + encl_page->va_offset));
+    if (ret == SGX_SUCCESS) {
+        encl->ewb_cnt++;
+    }
 	kunmap_atomic((void *)(unsigned long)(pginfo.pcmd - pcmd_offset));
 	kunmap_atomic((void *)(unsigned long)pginfo.srcpge);
 
@@ -318,6 +327,7 @@ static void sgx_evict_page(struct sgx_encl_page *entry,
 	sgx_free_page(entry->epc_page, encl);
 	entry->epc_page = NULL;
 	entry->flags &= ~SGX_ENCL_PAGE_RESERVED;
+//	encl->ewb_cnt++;
 }
 
 static void sgx_write_pages(struct sgx_encl *encl, struct list_head *src)
@@ -487,6 +497,7 @@ static struct sgx_epc_page *sgx_alloc_page_fast(void)
 		entry = list_first_entry(&sgx_free_list, struct sgx_epc_page,
 					 list);
 		list_del(&entry->list);
+		sgx_pages_alloced++;
 		sgx_nr_free_pages--;
 	}
 
@@ -565,6 +576,7 @@ void sgx_free_page(struct sgx_epc_page *entry, struct sgx_encl *encl)
 
 	spin_lock(&sgx_free_list_lock);
 	list_add(&entry->list, &sgx_free_list);
+	sgx_pages_freed++;
 	sgx_nr_free_pages++;
 	spin_unlock(&sgx_free_list_lock);
 }
@@ -588,3 +600,19 @@ void sgx_put_page(void *epc_page_vaddr)
 #else
 #endif
 }
+
+#ifdef CONFIG_PROC_FS
+int sgx_stats_read(struct seq_file *file, void *v)
+{
+	seq_printf(file, "%u %u %lu %lu %lu %u %u %u\n",
+		   sgx_encl_created,
+		   sgx_encl_released,
+		   sgx_retired_eadd_cnt,
+		   sgx_pages_alloced,
+		   sgx_pages_freed,
+		   sgx_nr_total_epc_pages,
+		   atomic_read(&sgx_va_pages_cnt),
+		   sgx_nr_free_pages);
+	return(0);
+}
+#endif

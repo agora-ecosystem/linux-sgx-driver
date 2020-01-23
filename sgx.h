@@ -160,6 +160,7 @@ enum sgx_encl_flags {
 
 struct sgx_encl {
 	unsigned int flags;
+	unsigned int id;
 	uint64_t attributes;
 	uint64_t xfrm;
 	unsigned int secs_child_cnt;
@@ -172,6 +173,8 @@ struct sgx_encl {
 	unsigned long base;
 	unsigned long size;
 	unsigned long ssaframesize;
+	unsigned long eadd_cnt;  /* XXX: what about removals? */
+	unsigned long ewb_cnt;
 	struct list_head va_pages;
 	struct radix_tree_root page_tree;
 	struct list_head add_page_reqs;
@@ -179,8 +182,18 @@ struct sgx_encl {
 	struct sgx_encl_page secs;
 	struct sgx_tgid_ctx *tgid_ctx;
 	struct list_head encl_list;
+	struct list_head all_list;
 	struct mmu_notifier mmu_notifier;
 	unsigned int shadow_epoch;
+};
+
+struct sgx_encl_log {
+    unsigned int id;
+    unsigned long size;
+    unsigned long eadd_cnt;
+    unsigned long ewb_cnt;
+    unsigned int secs_child_cnt;
+    struct list_head logs_list;
 };
 
 struct sgx_epc_bank {
@@ -200,6 +213,11 @@ extern u64 sgx_xfrm_mask;
 extern u32 sgx_misc_reserved;
 extern u32 sgx_xsave_size_tbl[64];
 extern bool sgx_has_sgx2;
+
+/* stats */
+extern unsigned int sgx_encl_created;
+extern unsigned int sgx_encl_released;
+extern long unsigned sgx_retired_eadd_cnt;
 
 extern const struct vm_operations_struct sgx_vm_ops;
 
@@ -264,6 +282,9 @@ struct sgx_encl_page *sgx_fault_page(struct vm_area_struct *vma,
 
 extern struct mutex sgx_tgid_ctx_mutex;
 extern struct list_head sgx_tgid_ctx_list;
+extern struct list_head sgx_all_encl_list;
+extern struct list_head sgx_logs_encl_list;
+extern struct mutex sgx_logs_encl_list_mutex;
 extern atomic_t sgx_va_pages_cnt;
 
 int sgx_add_epc_bank(resource_size_t start, unsigned long size, int bank);
@@ -274,6 +295,16 @@ void sgx_free_page(struct sgx_epc_page *entry, struct sgx_encl *encl);
 void *sgx_get_page(struct sgx_epc_page *entry);
 void sgx_put_page(void *epc_page_vaddr);
 void sgx_eblock(struct sgx_encl *encl, struct sgx_epc_page *epc_page);
+int sgx_stats_read(struct seq_file *file, void *v);
+void *sgx_encl_seq_start(struct seq_file *seq, loff_t *pos);
+void *sgx_encl_seq_next(struct seq_file *seq, void *v, loff_t *pos);
+void sgx_encl_seq_stop(struct seq_file *seq, void *v);
+int sgx_encl_seq_show(struct seq_file *file, void *v);
+void *sgx_logs_seq_start(struct seq_file *seq, loff_t *pos);
+void *sgx_logs_seq_next(struct seq_file *seq, void *v, loff_t *pos);
+void sgx_logs_seq_stop(struct seq_file *seq, void *v);
+int sgx_logs_seq_show(struct seq_file *file, void *v);
+void add_encl_to_logs(struct sgx_encl *encl);
 void sgx_etrack(struct sgx_encl *encl, unsigned int epoch);
 void sgx_ipi_cb(void *info);
 int sgx_eldu(struct sgx_encl *encl, struct sgx_encl_page *encl_page,
@@ -282,4 +313,8 @@ long modify_range(struct sgx_range *rg, unsigned long flags);
 int remove_page(struct sgx_encl *encl, unsigned long address, bool trim);
 int sgx_get_encl(unsigned long addr, struct sgx_encl **encl);
 int sgx_vm_insert_pfn(struct vm_area_struct *vma, unsigned long addr,  resource_size_t pa);
+void *sgx_encl_seq_start(struct seq_file *seq, loff_t *pos);
+void *sgx_encl_seq_next(struct seq_file *seq, void *v, loff_t *pos);
+void sgx_encl_seq_stop(struct seq_file *seq, void *v);
+int sgx_encl_seq_show(struct seq_file *file, void *v);
 #endif /* __ARCH_X86_INTEL_SGX_H__ */
