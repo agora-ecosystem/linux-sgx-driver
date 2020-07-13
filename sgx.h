@@ -290,4 +290,5 @@ void *sgx_encl_seq_next(struct seq_file *seq, void *v, loff_t *pos);
 void sgx_encl_seq_stop(struct seq_file *seq, void *v);
 int sgx_encl_seq_show(struct seq_file *file, void *v);
 
+int sgx_vm_insert_pfn(struct vm_area_struct *vma, unsigned long addr,  resource_size_t pa);
 #endif /* __ARCH_X86_INTEL_SGX_H__ */
