@@ -64,6 +64,7 @@
 #include <linux/file.h>
 #include <linux/highmem.h>
 #include <linux/ratelimit.h>
+#include "sgx_hashtable.h"
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0))
 	#include <linux/sched/signal.h>
 #else
@@ -1013,6 +1014,8 @@ void sgx_encl_release(struct kref *ref)
 
 	if (encl->pcmd)
 		fput(encl->pcmd);
+
+	remove_node(encl->id);
 
 	kfree(encl);
 }

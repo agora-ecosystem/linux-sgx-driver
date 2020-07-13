@@ -61,6 +61,7 @@
 #include "sgx.h"
 #include <linux/highmem.h>
 #include <linux/shmem_fs.h>
+#include "sgx_hashtable.h"
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0))
 	#include <linux/sched/mm.h>
 #else
@@ -276,6 +277,9 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 		epc_page = NULL;
 		goto out;
 	}
+	else {
+        increment_paging_counter(encl->id);
+	}
 
 	/* If SECS is evicted then reload it first */
 	if (encl->flags & SGX_ENCL_SECS_EVICTED) {
@@ -351,9 +355,11 @@ struct sgx_encl_page *sgx_fault_page(struct vm_area_struct *vma,
 				     struct vm_fault *vmf)
 {
 	struct sgx_encl_page *entry;
+	struct sgx_encl *encl;
 
 	do {
-		entry = sgx_do_fault(vma, addr, flags, vmf);
+	    global_page_fault++;
+	    entry = sgx_do_fault(vma, addr, flags, vmf);
 		if (!(flags & SGX_FAULT_RESERVE))
 			break;
 	} while (PTR_ERR(entry) == -EBUSY);

@@ -60,6 +60,7 @@
 
 #include "asm/msr-index.h"
 #include "sgx.h"
+#include "sgx_hashtable.h"
 #include <linux/acpi.h>
 #include <linux/file.h>
 #include <linux/highmem.h>
@@ -230,7 +231,11 @@ static int sgx_dev_init(struct device *parent)
 
 	pr_info("intel_sgx: " DRV_DESCRIPTION " v" DRV_VERSION "\n");
 
-	cpuid_count(SGX_CPUID, SGX_CPUID_CAPABILITIES, &eax, &ebx, &ecx, &edx);
+#ifdef SGX_PAGING_LOGGING
+	pr_info("intel_sgx: paging logging enabled\n");
+	init_paging_logging();
+#endif
+    cpuid_count(SGX_CPUID, SGX_CPUID_CAPABILITIES, &eax, &ebx, &ecx, &edx);
 	/* Only allow misc bits supported by the driver. */
 	sgx_misc_reserved = ~ebx | SGX_MISC_RESERVED_MASK;
 #ifdef CONFIG_X86_64
@@ -435,6 +440,7 @@ void cleanup_sgx_module(void)
 	platform_driver_unregister(&sgx_drv);
 	remove_proc_entry("sgx_stats", NULL);
 	remove_proc_entry("sgx_enclaves", NULL);
+    remove_debug_paging_logging();
 }
 
 module_init(init_sgx_module);
