@@ -296,19 +296,16 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 		goto out;
 	}
 
-	epc_page = sgx_alloc_page(SGX_ALLOC_ATOMIC);
+	epc_page = sgx_alloc_page_encl(SGX_ALLOC_ATOMIC, encl);
 	if (IS_ERR(epc_page)) {
 		rc = PTR_ERR(epc_page);
 		epc_page = NULL;
 		goto out;
 	}
-	else {
-        increment_paging_counter(encl->id);
-	}
 
 	/* If SECS is evicted then reload it first */
 	if (encl->flags & SGX_ENCL_SECS_EVICTED) {
-		secs_epc_page = sgx_alloc_page(SGX_ALLOC_ATOMIC);
+		secs_epc_page = sgx_alloc_page_encl(SGX_ALLOC_ATOMIC, encl);
 		if (IS_ERR(secs_epc_page)) {
 			rc = PTR_ERR(secs_epc_page);
 			secs_epc_page = NULL;
@@ -318,7 +315,7 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 		rc = sgx_eldu(encl, &encl->secs, secs_epc_page, true);
 		if (rc)
 			goto out;
-
+        increment_counter(encl->id, ELDU_COUNTER);
 		encl->secs.epc_page = secs_epc_page;
 		encl->flags &= ~SGX_ENCL_SECS_EVICTED;
 
@@ -329,7 +326,7 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 	rc = sgx_eldu(encl, entry, epc_page, false /* is_secs */);
 	if (rc)
 		goto out;
-
+    increment_counter(encl->id, ELDU_COUNTER);
 	/* Track the EPC page even if vm_insert_pfn fails; we need to ensure
 	 * the EPC page is properly freed and we can't do EREMOVE right away
 	 * because EREMOVE may fail due to an active cpu in the enclave.  We
@@ -375,10 +372,8 @@ struct sgx_encl_page *sgx_fault_page(struct vm_area_struct *vma,
 				     struct vm_fault *vmf)
 {
 	struct sgx_encl_page *entry;
-	struct sgx_encl *encl;
 
 	do {
-	    global_page_fault++;
 	    entry = sgx_do_fault(vma, addr, flags, vmf);
 		if (!(flags & SGX_FAULT_RESERVE))
 			break;

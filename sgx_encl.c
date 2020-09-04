@@ -267,6 +267,7 @@ static bool sgx_process_add_page_req(struct sgx_add_page_req *req,
 		       &req->secinfo, backing);
 
 	sgx_put_backing(backing, 0);
+	increment_counter(encl->id, EADD_COUNTER);
 	if (ret) {
 		sgx_warn(encl, "EADD returned %d\n", ret);
 		zap_vma_ptes(vma, encl_page->addr, PAGE_SIZE);
@@ -318,7 +319,7 @@ static void sgx_add_page_worker(struct work_struct *work)
 		if (skip_rest)
 			goto next;
 
-		epc_page = sgx_alloc_page(0);
+		epc_page = sgx_alloc_page_encl(0, encl);
 		if (IS_ERR(epc_page)) {
 			skip_rest = true;
 			goto next;
@@ -465,7 +466,7 @@ int sgx_init_page(struct sgx_encl *encl, struct sgx_encl_page *entry,
 			epc_page = *va_src;
 			*va_src = NULL;
 		} else {
-			epc_page = sgx_alloc_page(alloc_flags);
+			epc_page = sgx_alloc_page_encl(alloc_flags, encl);
 			if (IS_ERR(epc_page)) {
 				kfree(va_page);
 				return PTR_ERR(epc_page);
@@ -601,7 +602,7 @@ int sgx_encl_create(struct sgx_secs *secs)
 	if (IS_ERR(encl))
 		return PTR_ERR(encl);
 
-	secs_epc = sgx_alloc_page(0);
+	secs_epc = sgx_alloc_page_encl(0, encl);
 	if (IS_ERR(secs_epc)) {
 		ret = PTR_ERR(secs_epc);
 		goto out;
@@ -635,7 +636,10 @@ int sgx_encl_create(struct sgx_secs *secs)
 		goto out;
 	}
 
-	if (secs->attributes & SGX_ATTR_DEBUG)
+    sgx_info(encl, "Create enclave %d with size %lu MB\n", encl->id, (secs->size/1024)/1024);
+	print_enclave_status(encl->id, "ECREATE finished");
+
+    if (secs->attributes & SGX_ATTR_DEBUG)
 		encl->flags |= SGX_ENCL_DEBUG;
 
 	encl->mmu_notifier.ops = &sgx_mmu_notifier_ops;
@@ -948,6 +952,7 @@ int sgx_encl_init(struct sgx_encl *encl, struct sgx_sigstruct *sigstruct,
 		}
 	}
 
+    print_enclave_status(encl->id, "EINIT succeeded");
 	mutex_unlock(&encl->lock);
 
 	if (ret) {
@@ -967,6 +972,8 @@ void sgx_encl_release(struct kref *ref)
 	struct sgx_encl *encl = container_of(ref, struct sgx_encl, refcount);
 	struct radix_tree_iter iter;
 	void **slot;
+
+	print_enclave_status(encl->id, "EREMOVE start");
 
 	mutex_lock(&sgx_tgid_ctx_mutex);
 	sgx_encl_released++;

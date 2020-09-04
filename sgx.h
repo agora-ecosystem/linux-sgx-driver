@@ -273,6 +273,7 @@ int sgx_add_epc_bank(resource_size_t start, unsigned long size, int bank);
 int sgx_page_cache_init(void);
 void sgx_page_cache_teardown(void);
 struct sgx_epc_page *sgx_alloc_page(unsigned int flags);
+struct sgx_epc_page *sgx_alloc_page_encl(unsigned int flags, struct sgx_encl *encl);
 void sgx_free_page(struct sgx_epc_page *entry, struct sgx_encl *encl);
 void *sgx_get_page(struct sgx_epc_page *entry);
 void sgx_put_page(void *epc_page_vaddr);

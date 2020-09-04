@@ -100,6 +100,7 @@ struct sgx_encl_page *sgx_encl_augment(struct vm_area_struct *vma,
 
 	/* Note: Invoking function holds the encl->lock */
 
+//	epc_page = sgx_alloc_page(SGX_ALLOC_ATOMIC);
 	epc_page = sgx_alloc_page(SGX_ALLOC_ATOMIC);
 	if (IS_ERR(epc_page)) {
 		return ERR_PTR(PTR_ERR(epc_page));

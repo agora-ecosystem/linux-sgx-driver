@@ -70,6 +70,7 @@
 #endif
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include "sgx_hashtable.h"
 
 #define SGX_NR_LOW_EPC_PAGES_DEFAULT 32
 #define SGX_NR_SWAP_CLUSTER_MAX	16
@@ -105,9 +106,12 @@ static int sgx_test_and_clear_young_cb(pte_t *ptep,
 	pte_t pte;
 	int ret;
 
+	/* check the accessed bit*/
 	ret = pte_young(*ptep);
 	if (ret) {
+	    /* mark PTE as not recently accessed*/
 		pte = pte_mkold(*ptep);
+		/* set_pte stores a linux PTE into the linux page table */
 		set_pte_at((struct mm_struct *)data, addr, ptep, pte);
 	}
 
@@ -135,7 +139,11 @@ int sgx_test_and_clear_young(struct sgx_encl_page *page, struct sgx_encl *encl)
 	if (encl != vma->vm_private_data)
 		return 0;
 
-	return apply_to_page_range(vma->vm_mm, page->addr, PAGE_SIZE,
+    /*
+    * Scan a region of virtual memory, filling in page tables as necessary
+    * and calling a provided function on each leaf page table.
+    */
+    return apply_to_page_range(vma->vm_mm, page->addr, PAGE_SIZE,
 				   sgx_test_and_clear_young_cb, vma->vm_mm);
 }
 
@@ -322,6 +330,7 @@ static void sgx_evict_page(struct sgx_encl_page *entry,
 	sgx_free_page(entry->epc_page, encl);
 	entry->epc_page = NULL;
 	entry->flags &= ~SGX_ENCL_PAGE_RESERVED;
+    increment_counter(encl->id, EWB_COUNTER);
 }
 
 static void sgx_write_pages(struct sgx_encl *encl, struct list_head *src)
@@ -491,6 +500,26 @@ static struct sgx_epc_page *sgx_alloc_page_fast(void)
 	return entry;
 }
 
+static struct sgx_epc_page *sgx_alloc_page_fast_encl(struct sgx_encl *encl)
+{
+    struct sgx_epc_page *entry = NULL;
+
+    spin_lock(&sgx_free_list_lock);
+
+    if (!list_empty(&sgx_free_list)) {
+        entry = list_first_entry(&sgx_free_list, struct sgx_epc_page,
+                                 list);
+        list_del(&entry->list);
+        increment_counter(encl->id, SGX_PAGES_ALLOCED);
+        sgx_pages_alloced++;
+        sgx_nr_free_pages--;
+    }
+
+    spin_unlock(&sgx_free_list_lock);
+
+    return entry;
+}
+
 /**
  * sgx_alloc_page - allocate an EPC page
  * @flags:	allocation flags
@@ -537,10 +566,44 @@ struct sgx_epc_page *sgx_alloc_page(unsigned int flags)
 	return entry;
 }
 
+struct sgx_epc_page *sgx_alloc_page_encl(unsigned int flags, struct sgx_encl *encl)
+{
+    struct sgx_epc_page *entry;
+
+    for ( ; ; ) {
+        entry = sgx_alloc_page_fast_encl(encl);
+        if (entry)
+            break;
+
+        /* We need at minimum two pages for the #PF handler. */
+        if (atomic_read(&sgx_va_pages_cnt) >
+            (sgx_nr_total_epc_pages - 2))
+            return ERR_PTR(-ENOMEM);
+
+        if (flags & SGX_ALLOC_ATOMIC) {
+            entry = ERR_PTR(-EBUSY);
+            break;
+        }
+
+        if (signal_pending(current)) {
+            entry = ERR_PTR(-ERESTARTSYS);
+            break;
+        }
+
+        sgx_swap_pages(SGX_NR_SWAP_CLUSTER_MAX);
+        schedule();
+    }
+
+    if (sgx_nr_free_pages < sgx_nr_low_pages)
+        wake_up(&ksgxswapd_waitq);
+
+    return entry;
+}
+
 /**
  * sgx_free_page - free an EPC page
  *
- * EREMOVE an EPC page and insert it back to the list of free pages.
+ * EREMOVE an EPC page ansgx_encl_created insert it back to the list of free pages.
  * If EREMOVE fails, the error is printed out loud as a critical error.
  * It is an indicator of a driver bug if that would happen.
  *
@@ -563,6 +626,7 @@ void sgx_free_page(struct sgx_epc_page *entry, struct sgx_encl *encl)
 	list_add(&entry->list, &sgx_free_list);
 	sgx_pages_freed++;
 	sgx_nr_free_pages++;
+	increment_counter(encl->id, SGX_PAGES_FREED);
 	spin_unlock(&sgx_free_list_lock);
 }
 
