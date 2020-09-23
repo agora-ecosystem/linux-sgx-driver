@@ -66,6 +66,31 @@
 #else
 	#include <linux/mm.h>
 #endif
+int sgx_vm_insert_pfn(struct vm_area_struct *vma, unsigned long addr, resource_size_t pa)
+{
+	int rc;
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0))
+        rc = vmf_insert_pfn(vma, addr, PFN_DOWN(pa));
+#else
+    #if( defined(RHEL_RELEASE_VERSION) && defined(RHEL_RELEASE_CODE))
+        #if (RHEL_RELEASE_CODE > RHEL_RELEASE_VERSION(8, 1))
+            rc = vmf_insert_pfn(vma, addr, PFN_DOWN(pa));
+        #else //8.1 or below
+            rc = vm_insert_pfn(vma, addr, PFN_DOWN(pa));
+            if (!rc){
+                rc = VM_FAULT_NOPAGE;
+            }
+        #endif
+    #else
+        rc = vm_insert_pfn(vma, addr, PFN_DOWN(pa));
+        if (!rc){
+                rc = VM_FAULT_NOPAGE;
+        }
+    #endif
+#endif
+        return rc;
+}
 
 struct page *sgx_get_backing(struct sgx_encl *encl,
 			     struct sgx_encl_page *entry,
@@ -135,7 +160,7 @@ void sgx_invalidate(struct sgx_encl *encl, bool flush_cpus)
 		sgx_flush_cpus(encl);
 }
 
-static void sgx_ipi_cb(void *info)
+void sgx_ipi_cb(void *info)
 {
 }
 
@@ -144,10 +169,10 @@ void sgx_flush_cpus(struct sgx_encl *encl)
 	on_each_cpu_mask(mm_cpumask(encl->mm), sgx_ipi_cb, NULL, 1);
 }
 
-static int sgx_eldu(struct sgx_encl *encl,
-		    struct sgx_encl_page *encl_page,
-		    struct sgx_epc_page *epc_page,
-		    bool is_secs)
+int sgx_eldu(struct sgx_encl *encl,
+	     struct sgx_encl_page *encl_page,
+	     struct sgx_epc_page *epc_page,
+	     bool is_secs)
 {
 	struct page *backing;
 	struct page *pcmd;
@@ -212,7 +237,8 @@ out:
 
 static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 					  unsigned long addr,
-					  unsigned int flags)
+					  unsigned int flags,
+				          struct vm_fault *vmf)
 {
 	struct sgx_encl *encl = vma->vm_private_data;
 	struct sgx_encl_page *entry;
@@ -220,6 +246,7 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 	struct sgx_epc_page *secs_epc_page = NULL;
 	bool reserve = (flags & SGX_FAULT_RESERVE) != 0;
 	int rc = 0;
+	bool write = (vmf) ? (FAULT_FLAG_WRITE & vmf->flags) : false;
 
 	/* If process was forked, VMA is still there but vm_private_data is set
 	 * to NULL.
@@ -230,6 +257,14 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 	mutex_lock(&encl->lock);
 
 	entry = radix_tree_lookup(&encl->page_tree, addr >> PAGE_SHIFT);
+	if (vmf && !entry) {
+		entry = sgx_encl_augment(vma, addr, write);
+		goto out;
+	}
+
+	/* No entry found can not happen in 'reloading an evicted page'
+	 * flow.
+	 */
 	if (!entry) {
 		rc = -EFAULT;
 		goto out;
@@ -308,14 +343,9 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 	/* Do not free */
 	epc_page = NULL;
 	list_add_tail(&entry->epc_page->list, &encl->load_list);
+	rc = sgx_vm_insert_pfn(vma, entry->addr, entry->epc_page->pa);
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0))
-	rc = vmf_insert_pfn(vma, entry->addr, PFN_DOWN(entry->epc_page->pa));
-	if (rc != VM_FAULT_NOPAGE) {
-#else
-	rc = vm_insert_pfn(vma, entry->addr, PFN_DOWN(entry->epc_page->pa));
-	if (rc) {
-#endif
+        if (rc != VM_FAULT_NOPAGE) {
 		/* Kill the enclave if vm_insert_pfn fails; failure only occurs
 		 * if there is a driver bug or an unrecoverable issue, e.g. OOM.
 		 */
@@ -324,6 +354,7 @@ static struct sgx_encl_page *sgx_do_fault(struct vm_area_struct *vma,
 		goto out;
 	}
 
+	rc = 0;
 	sgx_test_and_clear_young(entry, encl);
 out:
 	mutex_unlock(&encl->lock);
@@ -336,12 +367,13 @@ out:
 
 struct sgx_encl_page *sgx_fault_page(struct vm_area_struct *vma,
 				     unsigned long addr,
-				     unsigned int flags)
+				     unsigned int flags,
+				     struct vm_fault *vmf)
 {
 	struct sgx_encl_page *entry;
 
 	do {
-		entry = sgx_do_fault(vma, addr, flags);
+		entry = sgx_do_fault(vma, addr, flags, vmf);
 		if (!(flags & SGX_FAULT_RESERVE))
 			break;
 	} while (PTR_ERR(entry) == -EBUSY);
@@ -365,16 +397,25 @@ void sgx_eblock(struct sgx_encl *encl, struct sgx_epc_page *epc_page)
 
 }
 
-void sgx_etrack(struct sgx_encl *encl)
+void sgx_etrack(struct sgx_encl *encl, unsigned int epoch)
 {
 	void *epc;
 	int ret;
 
+	/* If someone already called etrack in the meantime */
+	if (epoch < encl->shadow_epoch)
+		return;
+
 	epc = sgx_get_page(encl->secs.epc_page);
 	ret = __etrack(epc);
 	sgx_put_page(epc);
+	encl->shadow_epoch++;
 
-	if (ret) {
+	if (ret == SGX_PREV_TRK_INCMPL) {
+		sgx_dbg(encl, "ETRACK returned %d\n", ret);
+		smp_call_function(sgx_ipi_cb, NULL, 1);
+		BUG_ON(__etrack(epc));
+	} else if (ret) {
 		sgx_crit(encl, "ETRACK returned %d\n", ret);
 		sgx_invalidate(encl, true);
 	}

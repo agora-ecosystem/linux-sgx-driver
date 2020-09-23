@@ -76,6 +76,12 @@ static void sgx_vma_open(struct vm_area_struct *vma)
 	if (!encl)
 		return;
 
+	/* protect from fork */
+	if (encl->mm != current->mm) {
+		vma->vm_private_data = NULL;
+		return;
+	}
+
 	/* kref cannot underflow because ECREATE ioctl checks that there is only
 	 * one single VMA for the enclave before proceeding.
 	 */
@@ -96,16 +102,36 @@ static void sgx_vma_close(struct vm_area_struct *vma)
 	kref_put(&encl->refcount, sgx_encl_release);
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,11,0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,1,0))
+static unsigned int sgx_vma_fault(struct vm_fault *vmf)
+{
+    struct vm_area_struct *vma = vmf->vma;
+#else
+    #if( defined(RHEL_RELEASE_VERSION) && defined(RHEL_RELEASE_CODE))
+        #if (RHEL_RELEASE_CODE > RHEL_RELEASE_VERSION(8, 1))
+static unsigned int sgx_vma_fault(struct vm_fault *vmf)
+{
+    struct vm_area_struct *vma = vmf->vma;
+        #elif (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(8, 0))
 static int sgx_vma_fault(struct vm_fault *vmf)
 {
-	struct vm_area_struct *vma = vmf->vma;
-#else
+    struct vm_area_struct *vma = vmf->vma;
+        #else // 7.x
 static int sgx_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
+        #endif
+    #else
+        #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,11,0))
+static int sgx_vma_fault(struct vm_fault *vmf)
+{
+    struct vm_area_struct *vma = vmf->vma;
+        #else
+static int sgx_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+        #endif
+    #endif
 #endif
-	
-	
+
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,10,0))
 	unsigned long addr = (unsigned long)vmf->address;
 #else
@@ -113,7 +139,7 @@ static int sgx_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 #endif
 	struct sgx_encl_page *entry;
 
-	entry = sgx_fault_page(vma, addr, 0);
+	entry = sgx_fault_page(vma, addr, 0, vmf);
 
 	if (!IS_ERR(entry) || PTR_ERR(entry) == -EBUSY)
 		return VM_FAULT_NOPAGE;
@@ -212,7 +238,7 @@ static int sgx_vma_access(struct vm_area_struct *vma, unsigned long addr,
 				entry->flags &= ~SGX_ENCL_PAGE_RESERVED;
 
 			entry = sgx_fault_page(vma, (addr + i) & PAGE_MASK,
-					       SGX_FAULT_RESERVE);
+					       SGX_FAULT_RESERVE, NULL);
 			if (IS_ERR(entry)) {
 				ret = PTR_ERR(entry);
 				entry = NULL;

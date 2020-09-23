@@ -11,23 +11,17 @@ The Linux SGX software stack is comprised of the Intel(R) SGX driver, the Intel(
 
 The [linux-sgx-driver](https://github.com/01org/linux-sgx-driver) project hosts the out-of-tree driver for the Linux Intel(R) SGX software stack, which will be used until the driver upstreaming process is complete. 
 
-Within the linux-sgx-driver project, two versions of the out-of-tree driver are provided. Both versions are compatible with the linux-sgx PSW and SDK:
-- SGX 2.0 Linux Driver (sgx2)
-  * The sgx2 branch of the linux-sgx-driver project contains the SGX 2.0 Linux Driver. This driver has additional support for SGX 2.0-based features available in upcoming CPUs. This driver has the same behavior as the SGX 1.5 Linux Driver (master) on CPUs without SGX 2.0 support.
-- SGX 1.5 Linux Driver (master)
-  * The master branch of the linux-sgx-driver project tracks the proposed upstream version of the SGX 1.5 driver and does not yet support SGX 2.0-based features.
+IMPORTANT:
+---------
+This driver can be used to support earlier SGX-capable CPUs without Flexible Launch Control (FLC). However, please note that the ABI of this driver is diverged from the upstreaming SGX kernel patches and extra effort may be required to migrate software using this driver to future kernels with SGX support.  To minimize ABI divergence and better align all SGX software stack with future SGX enabled kernel, no new features will be added to this driver. Support for distro/kernel versions other than those listed here will be considered on a case-by-case basis. 
 
+The [DCAP driver]( https://github.com/intel/SGXDataCenterAttestationPrimitives/tree/master/driver) has been developed to track closely with the upstreaming kernel patches, and support all SGX CPUs with FLC. Therefore, we recommend SGX community to start using the DCAP driver to minimize future impact from adopting new mainline kernels with SGX support.
+
+For new feature requests/patches, please submit them directly to the [linux-sgx mailing list](http://vger.kernel.org/vger-lists.html#linux-sgx)
 
 License
 -------
 See License.txt for details.
-
-Contributing
--------
-Starting from 05/2017, we are importing the sgx driver code from the in-kernel sgx repository located at git-hub: https://github.com/jsakkine-intel/linux-sgx.git. Any contribution should be done there. Future versions of the sgx driver code will be imported later on. The motivation behind this decision is to maintain a single source code of the sgx linux driver.
-An additional directory inker2ext/ has been created, it contains a script and a patch file that can be used in order to separately generate the code base of the sgx external module; it can be used in case someone wants the newest sgx driver as an external module and does not want to wait for next update.
-
-The sgx2 branch hosts an initial implementation supporting SGX 2.0. This patch is maintained in inker2ext/sgx2.patch in the 2.0 branch and will be periodically rebased to take updates from the linux-sgx-driver:master branch. Contributions for this patch should be managed directly through the linux-sgx-driver project on Github.
 
 Documentation
 -------------
@@ -41,7 +35,10 @@ Build and Install the Intel(R) SGX Driver
 - Ensure that you have the following required operating systems:  
   * Ubuntu* 16.04.3 LTS Desktop 64bits
   * Ubuntu* 16.04.3 LTS Server 64bits
+  * Ubuntu* 18.04 LTS Desktop 64bits
+  * Ubuntu* 18.04 LTS Server 64bits
   * Red Hat Enterprise Linux Server release 7.4 64bits
+  * Red Hat Enterprise Linux Server release 8.0 64bits
   * CentOS 7.4.1708 64bits
   * SUSE Linux Enterprise Server 12 64bits
 - Ensure that you have the following required hardware:  
@@ -71,13 +68,16 @@ Build and Install the Intel(R) SGX Driver
         $ sudo yum install kernel
         $ sudo reboot
         ```
+     * On RHEL 8.0 elfutils-libelf-devel package is required:
+        ```
+        $ sudo yum install elfutils-libelf-devel
+        ```
 
 
 **Note:** Refer to the *"Intel® SGX Resource Enumeration Leaves"* section in the [Intel SGX Programming reference guide](https://software.intel.com/en-us/articles/intel-sdm) to make sure your cpu has the SGX feature.
 
 
 ### Build the Intel(R) SGX Driver
-**Note:** To use the SGX 2.0 driver, checkout or download the sgx2 branch and then follow the build instructions.
 
 To build Intel(R) SGX driver, change the directory to the driver path and enter the following command:
 ```

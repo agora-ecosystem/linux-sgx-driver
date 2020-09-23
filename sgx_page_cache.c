@@ -90,8 +90,17 @@ static unsigned long sgx_pages_alloced = 0;
 static struct task_struct *ksgxswapd_tsk;
 static DECLARE_WAIT_QUEUE_HEAD(ksgxswapd_waitq);
 
-static int sgx_test_and_clear_young_cb(pte_t *ptep, pgtable_t token,
-				       unsigned long addr, void *data)
+static int sgx_test_and_clear_young_cb(pte_t *ptep,
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 3, 0))
+    #if( defined(RHEL_RELEASE_VERSION) && defined(RHEL_RELEASE_CODE))
+        #if (RHEL_RELEASE_CODE <= RHEL_RELEASE_VERSION(8, 1))
+                                       pgtable_t token,
+        #endif
+    #else
+                                       pgtable_t token,
+    #endif
+#endif
+		unsigned long addr, void *data)
 {
 	pte_t pte;
 	int ret;
@@ -339,7 +348,7 @@ static void sgx_write_pages(struct sgx_encl *encl, struct list_head *src)
 	}
 
 	/* ETRACK */
-	sgx_etrack(encl);
+	sgx_etrack(encl, encl->shadow_epoch);
 
 	/* EWB */
 	while (!list_empty(src)) {
@@ -371,10 +380,19 @@ static void sgx_swap_pages(unsigned long nr_to_scan)
 	if (!encl)
 		goto out;
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
+	mmap_read_lock(encl->mm);
+#else
 	down_read(&encl->mm->mmap_sem);
+#endif
+
 	sgx_isolate_pages(encl, &cluster, nr_to_scan);
 	sgx_write_pages(encl, &cluster);
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
+	mmap_read_unlock(encl->mm);
+#else
 	up_read(&encl->mm->mmap_sem);
+#endif
 
 	kref_put(&encl->refcount, sgx_encl_release);
 out:

@@ -72,7 +72,15 @@
 #include <linux/platform_device.h>
 
 #define DRV_DESCRIPTION "Intel SGX Driver"
-#define DRV_VERSION "0.10"
+#define DRV_VERSION "2.11.0"
+
+#ifndef MSR_IA32_FEAT_CTL
+#define MSR_IA32_FEAT_CTL MSR_IA32_FEATURE_CONTROL
+#endif
+
+#ifndef FEAT_CTL_LOCKED
+#define FEAT_CTL_LOCKED FEATURE_CONTROL_LOCKED
+#endif
 
 MODULE_DESCRIPTION(DRV_DESCRIPTION);
 MODULE_AUTHOR("Jarkko Sakkinen <jarkko.sakkinen@linux.intel.com>");
@@ -80,9 +88,9 @@ MODULE_VERSION(DRV_VERSION);
 #ifndef X86_FEATURE_SGX
 	#define X86_FEATURE_SGX (9 * 32 + 2)
 #endif
-
-#define FEATURE_CONTROL_SGX_ENABLE                      (1<<18)
-
+#ifndef FEAT_CTL_SGX_ENABLED
+#define FEAT_CTL_SGX_ENABLED                      (1<<18)
+#endif
 /*
  * Global data.
  */
@@ -96,13 +104,7 @@ u64 sgx_encl_size_max_64;
 u64 sgx_xfrm_mask = 0x3;
 u32 sgx_misc_reserved;
 u32 sgx_xsave_size_tbl[64];
-
-#ifdef CONFIG_COMPAT
-long sgx_compat_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
-{
-	return sgx_ioctl(filep, cmd, arg);
-}
-#endif
+bool sgx_has_sgx2;
 
 static int sgx_mmap(struct file *file, struct vm_area_struct *vma)
 {
@@ -153,7 +155,7 @@ static const struct file_operations sgx_fops = {
 	.owner			= THIS_MODULE,
 	.unlocked_ioctl		= sgx_ioctl,
 #ifdef CONFIG_COMPAT
-	.compat_ioctl		= sgx_compat_ioctl,
+	.compat_ioctl		= sgx_ioctl,
 #endif
 	.mmap			= sgx_mmap,
 	.get_unmapped_area	= sgx_get_unmapped_area,
@@ -294,7 +296,7 @@ static int sgx_dev_init(struct device *parent)
 	if (!sgx_add_page_wq) {
 		pr_err("intel_sgx: alloc_workqueue() failed\n");
 		ret = -ENOMEM;
-		goto out_iounmap;
+		goto out_page_cache;
 	}
 
 	sgx_dev.parent = parent;
@@ -303,9 +305,6 @@ static int sgx_dev_init(struct device *parent)
 		pr_err("intel_sgx: misc_register() failed\n");
 		goto out_workqueue;
 	}
-
-	if (ret)
-		goto out_workqueue;
 
 #ifdef CONFIG_PROC_FS
 	if (!proc_create("sgx_stats", 0444, NULL, &sgx_stats_ops)) {
@@ -322,6 +321,8 @@ static int sgx_dev_init(struct device *parent)
 	return 0;
 out_workqueue:
 	destroy_workqueue(sgx_add_page_wq);
+out_page_cache:
+	sgx_page_cache_teardown();
 out_iounmap:
 #ifdef CONFIG_X86_64
 	for (i = 0; i < sgx_nr_epc_banks; i++)
@@ -349,14 +350,14 @@ static int sgx_drv_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	rdmsrl(MSR_IA32_FEATURE_CONTROL, fc);
+	rdmsrl(MSR_IA32_FEAT_CTL, fc);
 
-	if (!(fc & FEATURE_CONTROL_LOCKED)) {
+	if (!(fc & FEAT_CTL_LOCKED)) {
 		pr_err("intel_sgx: the feature control MSR is not locked\n");
 		return -ENODEV;
 	}
 
-	if (!(fc & FEATURE_CONTROL_SGX_ENABLE)) {
+	if (!(fc & FEAT_CTL_SGX_ENABLED)) {
 		pr_err("intel_sgx: SGX is not enabled\n");
 		return -ENODEV;
 	}
@@ -372,6 +373,8 @@ static int sgx_drv_probe(struct platform_device *pdev)
 		pr_err("intel_sgx: CPU does not support the SGX1 instructions\n");
 		return -ENODEV;
 	}
+
+	sgx_has_sgx2 = (eax & 2) != 0;
 
 	return sgx_dev_init(&pdev->dev);
 }
